@@ -1,4 +1,4 @@
-# vasp_plugin.py
+# Mimic of `subdft_sd3_d4.F`
 
 DFT-D3 / DFT-D4 dispersion correction via `PLUGINS/FORCE_AND_STRESS`.  
 GPU-compatible: runs on CPU, independent of the VASP binary compiler.
@@ -148,28 +148,29 @@ PLUGINS/FORCE_AND_STRESS = T
 
 ## Units
 
-| Quantity | VASP input | dftd3/dftd4 | Conversion |
-|----------|-----------|------------|------------|
-| Positions / lattice | Å | Bohr | CODATA 2022 via `scipy.constants` |
-| Energy | eV | Hartree | × `HARTREE_TO_EV` |
-| Forces | eV/Å | Ha/Bohr | force = −gradient |
-| Stress | eV | Hartree | stress += −virial |
+| Quantity | VASP / plugin receives | dftd3/dftd4 expects | Conversion |
+|----------|----------------------|---------------------|------------|
+| Lattice vectors | Å | Bohr | `× ANGSTROM_TO_BOHR` (CODATA 2022) |
+| Positions | fractional (dimensionless) | Cartesian Bohr | `frac @ lattice_bohr` |
+| Energy | eV | Hartree | `× HARTREE_TO_EV` |
+| Forces | eV/Å | Ha/Bohr | `× HARTREE_TO_EV × ANGSTROM_TO_BOHR`; sign: force = −gradient |
+| Stress | eV (raw virial) | Hartree | `× HARTREE_TO_EV`; sign: stress += −virial |
 
 ## VASP plugin interface layout
 
 Confirmed from `ConstantsForceAndStress` diagnostics:
 
-| Field | Shape | Type | Description |
-|-------|-------|------|-------------|
-| `lattice_vectors` | `(3, 3)` | float64, Å | Row vectors of the unit cell |
-| `positions` | `(N, 3)` | float64 | Fractional (Direct) coordinates |
-| `atomic_numbers` | `(n_species,)` | int32 | Atomic number per species |
-| `ion_types` | `(N,)` | int32 | Per-atom species index (0-based) |
+| Field | Shape | dtype | Unit / note |
+|-------|-------|-------|-------------|
+| `lattice_vectors` | `(3, 3)` | float64 | Å, row vectors |
+| `positions` | `(N, 3)` | float64 | fractional (Direct), dimensionless |
+| `atomic_numbers` | `(n_species,)` | int32 | atomic number per species |
+| `ion_types` | `(N,)` | int32 | per-atom species index, 0-based |
 
 Coordinate conversion to Cartesian Bohr (matches `vdw_sd3_d4.F`):
 
 ```python
-lattice_bohr = lattice_vectors * ANGSTROM_TO_BOHR   # (3,3) Bohr
-positions_bohr = positions @ lattice_bohr            # (N,3) Cartesian Bohr
-numbers = atomic_numbers[ion_types]                  # (N,) per-atom Z
+lattice_bohr   = lattice_vectors * ANGSTROM_TO_BOHR   # (3,3) Bohr, row vectors
+positions_bohr = positions @ lattice_bohr              # (N,3) Cartesian Bohr
+numbers        = atomic_numbers[ion_types]             # (N,) per-atom Z
 ```
