@@ -49,12 +49,12 @@ D3_PARAM_CLASS = {
 }
 
 GGA_TO_METHOD = {
-    "PE": "pbe",    "PS": "pbesol", "RP": "rpbe",   "91": "pw91",
-    "MK": "revpbe", "BO": "revpbe", "OR": "revpbe",
-    "RE": "revpbe", "ML": "revpbe", "CX": "revpbe",
-    "AM": "am05",   "B3": "b3lyp",
+    "PE": "pbe",    "PS": "pbesol", "RP": "rpbe", "91": "pw91",
+    "RE": "revpbe", "AM": "am05",   "B3": "b3lyp",
     "CA": "pbe",    "HL": "pbe",    "WI": "pbe",
 }
+
+_VDW_DF_CODES = {"MK", "BO", "OR", "ML", "CX"}
 
 METAGGA_TO_METHOD = {
     "R2SCAN": "r2scan",  "SCAN":   "scan",    "RSCAN": "rscan",
@@ -210,6 +210,12 @@ def detect_method(normal_tags: dict) -> tuple[str, bool]:
             )
         method = GGA_TO_METHOD.get(gga)
         if method:
+            if gga in _VDW_DF_CODES:
+                raise ValueError(
+                    f"[vasp_plugin] GGA={gga} is a vdW-DF functional that already "
+                    f"includes non-local correlation. Adding D3/D4 on top is physically "
+                    f"incorrect. Set ! VDW_S8 / ! VDW_A1 / ! VDW_A2 explicitly if intended."
+                )
             print(f"[vasp_plugin] XC: GGA={gga} -> '{method}'")
             return method, False
         print(f"[vasp_plugin] WARNING: GGA={gga} not mapped; falling back to POTCAR LEXCH.")
