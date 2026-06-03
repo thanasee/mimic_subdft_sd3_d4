@@ -1,8 +1,4 @@
-# vasp_plugin.py — DFT-D3/D4 dispersion via PLUGINS/FORCE_AND_STRESS
-# See README.md for full tag reference, XC detection rules, and examples.
-
 import re
-import math
 from pathlib import Path
 
 import numpy as np
@@ -26,11 +22,9 @@ try:
 except ModuleNotFoundError:
     d4 = None
 
-# Unit conversion (CODATA 2022)
 ANGSTROM_TO_BOHR = 1e-10 / physical_constants["Bohr radius"][0]
 HARTREE_TO_EV    = physical_constants["Hartree energy in eV"][0]
 
-# IVDW → (library, fixed_damping | None)
 IVDW_VERSION = {
     11: ("d3", "zero"),
     12: ("d3", "rational"),
@@ -55,19 +49,19 @@ D3_PARAM_CLASS = {
 }
 
 GGA_TO_METHOD = {
-    "PE": "pbe", "PS": "pbesol", "RP": "rpbe", "91": "pw91",
+    "PE": "pbe",    "PS": "pbesol", "RP": "rpbe",   "91": "pw91",
     "MK": "revpbe", "BO": "revpbe", "OR": "revpbe",
     "RE": "revpbe", "ML": "revpbe", "CX": "revpbe",
-    "AM": "am05", "B3": "b3lyp",
-    "CA": "pbe", "HL": "pbe", "WI": "pbe",
+    "AM": "am05",   "B3": "b3lyp",
+    "CA": "pbe",    "HL": "pbe",    "WI": "pbe",
 }
 
 METAGGA_TO_METHOD = {
-    "R2SCAN": "r2scan", "SCAN": "scan", "RSCAN": "rscan",
-    "RTPSS": "revtpss", "RTPSS0": "revtpss0",
-    "TPSS": "tpss", "TPSSH": "tpssh",
-    "MS2": "ms2", "MS2H": "ms2h", "PKZB": "pkzb",
-    "M06L": "m06l", "MN12L": "mn12l", "MN15L": "mn15l",
+    "R2SCAN": "r2scan",  "SCAN":   "scan",    "RSCAN": "rscan",
+    "RTPSS":  "revtpss", "RTPSS0": "revtpss0",
+    "TPSS":   "tpss",    "TPSSH":  "tpssh",
+    "MS2":    "ms2",     "MS2H":   "ms2h",    "PKZB":  "pkzb",
+    "M06L":   "m06l",    "MN12L":  "mn12l",   "MN15L": "mn15l",
 }
 
 _HYBRID_MAP: dict[tuple[str, float], str] = {
@@ -76,6 +70,7 @@ _HYBRID_MAP: dict[tuple[str, float], str] = {
     ("PE", 0.3): "hse03",
     ("PS", 0.2): "hsesol",
 }
+
 _AEXX_STANDARD = 0.25
 
 _S9_BEHAVIOUR = {
@@ -111,15 +106,17 @@ _D3_TOML_KEY = {
 }
 _D3_TOML_RENAME = {
     "rs6": "rs6", "rs8": "rs8", "alp": "alp", "bet": "bet",
-    "s6": "s6", "s8": "s8", "s9": "s9", "a1": "a1", "a2": "a2",
+    "s6":  "s6",  "s8":  "s8",  "s9":  "s9",  "a1":  "a1",  "a2": "a2",
 }
 _TOML_META_KEYS = {"doi", "damping", "mbd"}
 
+_CUTOFF_DEFAULTS_BOHR: dict[str, tuple[float, float]] = {
+    "d3": (np.sqrt(9000.0), 40.0),
+    "d4": (60.0,            30.0),
+}
 
-# ── INCAR parser ──────────────────────────────────────────────────────────────
-
-_TAG_RE = re.compile(r"^\s*([A-Z0-9_/]+)\s*=\s*(.+)", re.IGNORECASE)
-
+_TAG_RE   = re.compile(r"^\s*([A-Z0-9_/]+)\s*=\s*(.+)", re.IGNORECASE)
+_LEXCH_RE = re.compile(r"^\s*LEXCH\s*=\s*(\S+)",        re.IGNORECASE)
 
 def _parse_segment(segment: str) -> tuple[str, str] | None:
     segment = segment.strip()
@@ -128,9 +125,7 @@ def _parse_segment(segment: str) -> tuple[str, str] | None:
     m = _TAG_RE.match(segment)
     return (m.group(1).upper(), m.group(2).strip()) if m else None
 
-
 def parse_incar(path: str = "INCAR") -> tuple[dict, dict]:
-    """Return (normal_tags, plugin_tags) from a single INCAR read."""
     normal_tags: dict[str, str] = {}
     plugin_tags: dict[str, str] = {}
     incar = Path(path)
@@ -151,14 +146,7 @@ def parse_incar(path: str = "INCAR") -> tuple[dict, dict]:
                     normal_tags[result[0]] = result[1]
     return normal_tags, plugin_tags
 
-
-# ── POTCAR parser ─────────────────────────────────────────────────────────────
-
-_LEXCH_RE = re.compile(r"^\s*LEXCH\s*=\s*(\S+)", re.IGNORECASE)
-
-
 def read_lexch_from_potcar(path: str = "POTCAR") -> str | None:
-    """Return the first LEXCH value from POTCAR header, or None."""
     potcar = Path(path)
     if not potcar.exists():
         return None
@@ -171,27 +159,20 @@ def read_lexch_from_potcar(path: str = "POTCAR") -> str | None:
                 return m.group(1).upper().strip()
     return None
 
-
-# ── XC method detection ───────────────────────────────────────────────────────
-
 def _bool_tag(value: str) -> bool:
     return value.upper().strip(".") in ("TRUE", "T")
 
-
 def _float_tag(value: str) -> float:
     return float(value)
-
 
 def _warn_aexx(normal_tags: dict, label: str) -> None:
     aexx = _float_tag(normal_tags.get("AEXX", "0.25"))
     if abs(aexx - _AEXX_STANDARD) > 1e-6:
         print(f"[vasp_plugin] WARNING: AEXX={aexx} for {label}. "
-              f"D3/D4 params are fitted for AEXX={_AEXX_STANDARD}; "
-              f"consider explicit ! VDW_* overrides.")
+              f"D3/D4 params fitted for AEXX={_AEXX_STANDARD}; "
+              f"use explicit ! VDW_* overrides.")
 
-
-def detect_method(normal_tags: dict) -> str:
-    """Resolve the dftd3/dftd4 method name from INCAR normal tags + POTCAR LEXCH."""
+def detect_method(normal_tags: dict) -> tuple[str, bool]:
     for tag, name in (
         ("LMODELHF", "DDH"), ("LRHFCALC", "RSHXLDA/RSHXPBE"), ("LTHOMAS", "TF-screened hybrid")
     ):
@@ -210,7 +191,7 @@ def detect_method(normal_tags: dict) -> str:
             if lhfcalc:
                 _warn_aexx(normal_tags, label)
             print(f"[vasp_plugin] XC: {label} -> '{method}'")
-            return method
+            return method, True
         print(f"[vasp_plugin] WARNING: METAGGA={metagga} not in D3/D4 database; "
               f"falling back to GGA/LEXCH.")
 
@@ -221,8 +202,8 @@ def detect_method(normal_tags: dict) -> str:
             method   = _HYBRID_MAP.get((gga, round(hfscreen, 1)))
             if method:
                 _warn_aexx(normal_tags, f"GGA={gga} HFSCREEN={hfscreen}")
-                print(f"[vasp_plugin] XC: GGA={gga} + LHFCALC + HFSCREEN={hfscreen} -> '{method}'")
-                return method
+                print(f"[vasp_plugin] XC: GGA={gga} LHFCALC HFSCREEN={hfscreen} -> '{method}'")
+                return method, False
             raise ValueError(
                 f"[vasp_plugin] Unsupported hybrid GGA={gga} HFSCREEN={hfscreen}. "
                 f"Supported: PBE0 (PE,0), HSE06 (PE,0.2), HSE03 (PE,0.3), HSEsol (PS,0.2)."
@@ -230,7 +211,7 @@ def detect_method(normal_tags: dict) -> str:
         method = GGA_TO_METHOD.get(gga)
         if method:
             print(f"[vasp_plugin] XC: GGA={gga} -> '{method}'")
-            return method
+            return method, False
         print(f"[vasp_plugin] WARNING: GGA={gga} not mapped; falling back to POTCAR LEXCH.")
 
     lexch = read_lexch_from_potcar("POTCAR")
@@ -238,34 +219,55 @@ def detect_method(normal_tags: dict) -> str:
         method = GGA_TO_METHOD.get(lexch)
         if method:
             print(f"[vasp_plugin] XC: POTCAR LEXCH={lexch} -> '{method}'")
-            return method
+            return method, False
         print(f"[vasp_plugin] WARNING: POTCAR LEXCH={lexch} not mapped.")
 
     print("[vasp_plugin] WARNING: XC unknown; defaulting to 'pbe'.")
-    return "pbe"
-
-
-# ── Module-level toml cache ───────────────────────────────────────────────────
+    return "pbe", False
 
 def _load_toml_once(package_name: str) -> dict:
     if tomllib is None:
         return {}
+    candidates: list[Path] = []
     try:
         mod = __import__(package_name)
-        with (Path(mod.__file__).parent / "parameters.toml").open("rb") as fh:
-            return tomllib.load(fh)
+        candidates.append(Path(mod.__file__).parent / "parameters.toml")
+        pkg_root = Path(mod.__file__).parent
+        for _ in range(6):
+            pkg_root = pkg_root.parent
+            share_name = "s-dftd3" if package_name == "dftd3" else package_name
+            candidates.append(pkg_root / "share" / share_name / "parameters.toml")
     except Exception:
-        return {}
+        pass
+    for path in candidates:
+        if path.exists():
+            try:
+                with path.open("rb") as fh:
+                    return tomllib.load(fh)
+            except Exception:
+                continue
+    return {}
 
+_D3_TOML_DATA: dict      = _load_toml_once("dftd3")
+_D4_TOML_DATA: dict      = _load_toml_once("dftd4")
+_D3_METHODS: frozenset   = frozenset(_D3_TOML_DATA.get("parameter", {}).keys())
+_D4_METHODS: frozenset   = frozenset(_D4_TOML_DATA.get("parameter", {}).keys())
 
-_D3_TOML_DATA: dict = _load_toml_once("dftd3")
-_D4_TOML_DATA: dict = _load_toml_once("dftd4")
+if not _D3_METHODS:
+    print("[vasp_plugin] WARNING: dftd3 parameters.toml not loaded; XC validation skipped.")
+if not _D4_METHODS:
+    print("[vasp_plugin] WARNING: dftd4 parameters.toml not loaded; XC validation skipped.")
 
-
-# ── VDW parameter loading ─────────────────────────────────────────────────────
+def _validate_method(method: str, library: str, is_metagga: bool = False) -> str:
+    method_set = _D3_METHODS if library == "d3" else _D4_METHODS
+    if not method_set or method in method_set:
+        return method
+    fallback = "scan" if is_metagga else "pbe"
+    print(f"[vasp_plugin] WARNING: '{method}' not in {library} database; "
+          f"falling back to '{fallback}'. Use ! VDW_* for correct parameters.")
+    return fallback
 
 def _toml_params(data: dict, path: list[str]) -> dict:
-    """Walk nested dict by path list; return {} if any key is missing."""
     node = data
     for key in path:
         if not isinstance(node, dict):
@@ -273,12 +275,10 @@ def _toml_params(data: dict, path: list[str]) -> dict:
         node = node.get(key, {})
     return {k: v for k, v in node.items() if k not in _TOML_META_KEYS} if isinstance(node, dict) else {}
 
-
 def _load_d3_defaults(method: str, d3_version: str, s9_value: float) -> dict:
-    """Load D3 defaults from cached toml; s9 set to s9_value."""
     if not _D3_TOML_DATA:
         return {}
-    key = _D3_TOML_KEY[d3_version]
+    key    = _D3_TOML_KEY[d3_version]
     merged = {
         **_toml_params(_D3_TOML_DATA, ["default", "parameter", "d3", key]),
         **_toml_params(_D3_TOML_DATA, ["parameter", method.lower(), "d3", key]),
@@ -287,13 +287,11 @@ def _load_d3_defaults(method: str, d3_version: str, s9_value: float) -> dict:
     result["s9"] = s9_value
     return result
 
-
 def _load_d4_defaults(method: str, s9_value: float) -> dict:
-    """Load D4 defaults from cached toml; s9 set to s9_value."""
     if not _D4_TOML_DATA:
         return {}
     variant = "bj-eeq-atm" if s9_value != 0.0 else "bj-eeq-two"
-    merged = {
+    merged  = {
         **_toml_params(_D4_TOML_DATA, ["default", "parameter", "d4", variant]),
         **_toml_params(_D4_TOML_DATA, ["parameter", method.lower(), "d4", variant]),
     }
@@ -301,23 +299,11 @@ def _load_d4_defaults(method: str, s9_value: float) -> dict:
     result["s9"] = s9_value
     return result
 
-
-# Default cutoffs in Bohr — from VASP source (vdw_sd3_d4.F):
-#   D3: disp2 = sqrt(9000) Bohr (~50.20 Å),  cn = 40 Bohr (~21.17 Å)
-#   D4: disp2 = 60 Bohr    (~31.75 Å),        cn = 30 Bohr (~15.88 Å)
-_CUTOFF_DEFAULTS_BOHR: dict[str, tuple[float, float]] = {
-    "d3": (math.sqrt(9000.0), 40.0),
-    "d4": (60.0,              30.0),
-}
-
-
 def _parse_cutoff_params(plugin_tags: dict, method_key: str) -> tuple[float, float]:
-    """Return (disp2_bohr, cn_bohr). User overrides in Å converted; defaults already Bohr."""
     r_def, cn_def = _CUTOFF_DEFAULTS_BOHR[method_key]
     r  = _float_tag(plugin_tags["VDW_RADIUS"])   * ANGSTROM_TO_BOHR if "VDW_RADIUS"   in plugin_tags else r_def
     cn = _float_tag(plugin_tags["VDW_CNRADIUS"]) * ANGSTROM_TO_BOHR if "VDW_CNRADIUS" in plugin_tags else cn_def
     return r, cn
-
 
 def _parse_vdw_params(
     plugin_tags: dict,
@@ -325,9 +311,9 @@ def _parse_vdw_params(
     d3_version:  str | None,
     method:      str = "",
 ) -> dict | None:
-    """Return merged damping params dict for new_param(), or None if no overrides."""
     s9_beh   = _S9_BEHAVIOUR[ivdw]
     vasp_map = _VDW_TO_D3 if d3_version is not None else _VDW_TO_D4
+    library  = "d3" if d3_version is not None else "d4"
 
     if s9_beh == "fixed_zero" and "VDW_S9" in plugin_tags:
         print(f"[vasp_plugin] WARNING: ! VDW_S9 ignored for ! IVDW={ivdw} (s9=0 fixed).")
@@ -358,71 +344,28 @@ def _parse_vdw_params(
     if missing:
         vasp_missing = [k for k, v in vasp_map.items() if v in missing and k != "VDW_S9"]
         raise ValueError(
-            f"[vasp_plugin] Required params missing after merging defaults for '{method}'. "
-            f"Functional may not be in the D3/D4 database. "
+            f"[vasp_plugin] Required params missing for '{method}' in {library}. "
             f"Set explicitly: {vasp_missing}"
         )
     return merged
 
-
-# ── Dispersion runners ────────────────────────────────────────────────────────
-
-def _run_d3(
-    version:         str,
-    method:          str,
-    numbers,
-    positions,
-    lattice_vectors,
-    custom_params:   dict | None         = None,
-    cutoffs:         tuple[float, float] = (math.sqrt(9000.0), 40.0),
-) -> dict:
-    if d3 is None:
-        raise ModuleNotFoundError("dftd3 not installed: conda install -c conda-forge dftd3-python")
-    cls   = D3_PARAM_CLASS[version]()
-    param = cls(**custom_params) if custom_params else cls(method=method, atm=False)
-    disp  = d3.DispersionModel(numbers=numbers, positions=positions, lattice=lattice_vectors)
-    disp.set_realspace_cutoff(cutoffs[0], cutoffs[0], cutoffs[1])
-    return disp.get_dispersion(param=param, grad=True)
-
-
-def _run_d4(
-    method:          str,
-    numbers,
-    positions,
-    lattice_vectors,
-    d4_model:        str                 = "d4",
-    custom_params:   dict | None         = None,
-    cutoffs:         tuple[float, float] = (60.0, 30.0),
-) -> dict:
-    if d4 is None:
-        raise ModuleNotFoundError("dftd4 not installed: conda install -c conda-forge dftd4-python")
-    param = d4.DampingParam(**custom_params) if custom_params else d4.DampingParam(method=method, atm=True)
-    disp  = d4.DispersionModel(numbers=numbers, positions=positions, lattice=lattice_vectors, model=d4_model)
-    disp.set_realspace_cutoff(cutoffs[0], cutoffs[0], cutoffs[1])
-    return disp.get_dispersion(param=param, grad=True)
-
-
-# ── Plugin entry point ────────────────────────────────────────────────────────
-
-def force_and_stress(constants, additions) -> None:
-    """PLUGINS/FORCE_AND_STRESS entry point — called by VASP at each ionic step."""
+def _init() -> dict:
     normal_tags, plugin_tags = parse_incar("INCAR")
 
     ivdw = int(plugin_tags.get("IVDW", "0"))
     if ivdw == 0:
         print("[vasp_plugin] ! IVDW not found; no dispersion applied.")
-        return
+        return {"active": False}
     if ivdw not in IVDW_VERSION:
         raise ValueError(f"[vasp_plugin] ! IVDW={ivdw} unsupported. Valid: {sorted(IVDW_VERSION)}")
 
     version_key, fixed_damping = IVDW_VERSION[ivdw]
-    method = detect_method(normal_tags)
-
-    lattice_vectors = np.asarray(constants.lattice_vectors) * ANGSTROM_TO_BOHR
-    positions       = np.asarray(constants.positions) @ lattice_vectors
-    numbers         = np.asarray(constants.atomic_numbers)[np.asarray(constants.ion_types)]
+    method, is_metagga = detect_method(normal_tags)
+    method = _validate_method(method, version_key, is_metagga=is_metagga)
 
     if version_key == "d3":
+        if d3 is None:
+            raise ModuleNotFoundError("dftd3 not installed: conda install -c conda-forge dftd3-python")
         if fixed_damping is not None:
             damping_str = fixed_damping
         else:
@@ -433,26 +376,49 @@ def force_and_stress(constants, additions) -> None:
                 )
             damping_str = plugin_tags["SDFTD3_DAMPING"].lower().strip()
         if damping_str not in DAMPING_MAP:
-            raise ValueError(f"[vasp_plugin] Unknown ! SDFTD3_DAMPING='{damping_str}'. Valid: {list(DAMPING_MAP)}")
+            raise ValueError(f"[vasp_plugin] Unknown SDFTD3_DAMPING='{damping_str}'. Valid: {list(DAMPING_MAP)}")
         d3_version    = DAMPING_MAP[damping_str]
         custom_params = _parse_vdw_params(plugin_tags, ivdw=ivdw, d3_version=d3_version, method=method)
         cutoffs       = _parse_cutoff_params(plugin_tags, "d3")
+        cls           = D3_PARAM_CLASS[d3_version]()
+        param         = cls(**custom_params) if custom_params else cls(method=method, atm=False)
         print(f"[vasp_plugin] D3 {d3_version}  method={method}"
               + (f"  overrides={custom_params}" if custom_params else ""))
-        res = _run_d3(d3_version, method, numbers, positions, lattice_vectors,
-                      custom_params=custom_params, cutoffs=cutoffs)
+        return {"active": True, "library": "d3", "param": param, "cutoffs": cutoffs}
 
     else:
+        if d4 is None:
+            raise ModuleNotFoundError("dftd4 not installed: conda install -c conda-forge dftd4-python")
         raw_model = plugin_tags.get("DFTD4_MODEL", "D4").upper().strip()
         if raw_model not in ("D4", "D4S"):
-            raise ValueError(f"[vasp_plugin] Unknown ! DFTD4_MODEL='{raw_model}'. Valid: D4, D4S")
+            raise ValueError(f"[vasp_plugin] Unknown DFTD4_MODEL='{raw_model}'. Valid: D4, D4S")
         d4_model      = raw_model.lower()
         custom_params = _parse_vdw_params(plugin_tags, ivdw=ivdw, d3_version=None, method=method)
         cutoffs       = _parse_cutoff_params(plugin_tags, "d4")
+        param         = d4.DampingParam(**custom_params) if custom_params else d4.DampingParam(method=method, atm=True)
         print(f"[vasp_plugin] D4 model={d4_model}  method={method}"
               + (f"  overrides={custom_params}" if custom_params else ""))
-        res = _run_d4(method, numbers, positions, lattice_vectors,
-                      d4_model=d4_model, custom_params=custom_params, cutoffs=cutoffs)
+        return {"active": True, "library": "d4", "param": param, "d4_model": d4_model, "cutoffs": cutoffs}
+
+_CFG: dict = _init()
+
+def force_and_stress(constants, additions) -> None:
+    if not _CFG["active"]:
+        return
+
+    lattice_bohr = np.asarray(constants.lattice_vectors) * ANGSTROM_TO_BOHR
+    positions    = np.asarray(constants.positions) @ lattice_bohr
+    numbers      = np.asarray(constants.atomic_numbers)[np.asarray(constants.ion_types)]
+    cutoffs      = _CFG["cutoffs"]
+
+    if _CFG["library"] == "d3":
+        disp = d3.DispersionModel(numbers=numbers, positions=positions, lattice=lattice_bohr)
+    else:
+        disp = d4.DispersionModel(numbers=numbers, positions=positions,
+                                  lattice=lattice_bohr, model=_CFG["d4_model"])
+
+    disp.set_realspace_cutoff(cutoffs[0], cutoffs[0], cutoffs[1])
+    res = disp.get_dispersion(param=_CFG["param"], grad=True)
 
     additions.total_energy += res["energy"]   * HARTREE_TO_EV
     additions.forces       -= res["gradient"] * (HARTREE_TO_EV * ANGSTROM_TO_BOHR)
