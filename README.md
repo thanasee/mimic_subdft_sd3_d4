@@ -1,7 +1,8 @@
-# Mimic of `subdft_sd3_d4.F`
+# Mimic of `vdw_sd3_d4.F`
 
-DFT-D3 / DFT-D4 dispersion correction via `PLUGINS/FORCE_AND_STRESS`.  
-GPU-compatible: runs on CPU, independent of the VASP binary compiler.
+Python reimplementation of `vdw_sd3_d4.F` via `PLUGINS/FORCE_AND_STRESS`.  
+Provides DFT-D3 / DFT-D4 dispersion corrections without recompiling VASP —
+GPU-compatible, runs on CPU independent of the VASP binary compiler.
 
 ## Dependencies
 
@@ -105,6 +106,20 @@ Reads from normal INCAR lines + POTCAR `LEXCH`:
 **AEXX:** D3/D4 hybrid parameters are fitted for `AEXX=0.25`. A warning is
 printed if `AEXX` differs, but the method name is still returned.
 
+### XC method asymmetries
+
+Some functionals exist in only one library (confirmed from `parameters.toml`).
+The plugin warns and falls back automatically:
+
+| Method | dftd3 | dftd4 | Fallback |
+|--------|-------|-------|---------|
+| `am05` | ✗ | ✓ | `pbe` (GGA) |
+| `mn12l` | ✓ | ✗ | `scan` (meta-GGA) |
+| `mn15l` | ✓ | ✗ | `scan` |
+| `ms2` | ✓ | ✗ | `scan` |
+| `ms2h` | ✓ | ✗ | `scan` |
+| `pkzb` | ✓ | ✗ | `scan` |
+
 ## Example INCAR snippets
 
 ### PBE-D3(BJ)
@@ -157,8 +172,6 @@ PLUGINS/FORCE_AND_STRESS = T
 | Stress | eV (raw virial) | Hartree | `× HARTREE_TO_EV`; sign: stress += −virial |
 
 ## VASP plugin interface layout
-
-Confirmed from `ConstantsForceAndStress` diagnostics:
 
 | Field | Shape | dtype | Unit / note |
 |-------|-------|-------|-------------|
