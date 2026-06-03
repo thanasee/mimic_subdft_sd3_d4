@@ -7,7 +7,7 @@ GPU-compatible, runs on CPU independent of the VASP binary compiler.
 ## Dependencies
 
 ```bash
-conda install -c conda-forge dftd3-python dftd4-python scipy
+conda install -c conda-forge simple-dftd3 dftd3-python dftd4 dftd4-python scipy numpy
 ```
 
 `tomllib` (Python ≥ 3.11) or `tomli` (backport) is used for partial VDW
