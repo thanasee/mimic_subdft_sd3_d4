@@ -85,8 +85,9 @@ Unset parameters use library defaults for the detected XC functional.
 Reads from normal INCAR lines + POTCAR `LEXCH`:
 
 1. `LMODELHF` / `LRHFCALC` / `LTHOMAS` = `.TRUE.` → **ValueError** (no D3/D4 params)
-2. `METAGGA` (overrides GGA)
-3. `GGA` + `LHFCALC` → hybrid lookup by `(GGA, HFSCREEN)`:
+2. `GGA` = `MK` / `BO` / `OR` / `ML` / `CX` (vdW-DF family) → **ValueError** (already include non-local correlation; D3/D4 would double-count dispersion)
+3. `METAGGA` (overrides GGA)
+4. `GGA` + `LHFCALC` → hybrid lookup by `(GGA, HFSCREEN)`:
 
    | GGA | HFSCREEN | Functional |
    |-----|---------|------------|
@@ -99,9 +100,9 @@ Reads from normal INCAR lines + POTCAR `LEXCH`:
    excluded — no dedicated D3/D4 parameter set exists; set `! VDW_S8` /
    `! VDW_A1` / `! VDW_A2` explicitly.
 
-4. `GGA` alone (plain GGA)
-5. `POTCAR` `LEXCH` (fallback when `GGA` absent from INCAR)
-6. `"pbe"` + warning (last resort)
+5. `GGA` alone (plain GGA)
+6. `POTCAR` `LEXCH` (fallback when `GGA` absent from INCAR)
+7. `"pbe"` + warning (last resort)
 
 **AEXX:** D3/D4 hybrid parameters are fitted for `AEXX=0.25`. A warning is
 printed if `AEXX` differs, but the method name is still returned.
