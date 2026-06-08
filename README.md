@@ -188,3 +188,14 @@ lattice_bohr   = lattice_vectors * ANGSTROM_TO_BOHR   # (3,3) Bohr, row vectors
 positions_bohr = positions @ lattice_bohr              # (N,3) Cartesian Bohr
 numbers        = atomic_numbers[ion_types]             # (N,) per-atom Z
 ```
+
+## Limitations
+
+### NEB with VTST optimizers
+
+`PLUGINS/FORCE_AND_STRESS` runs after VTST's force projection in `chain.F`.
+Dispersion forces added by the plugin are never projected along the band,
+preventing NEB convergence.
+
+**Workaround:** use VASP's built-in optimizer instead of VTST's optimizer
+(remove `IOPT` from INCAR).
